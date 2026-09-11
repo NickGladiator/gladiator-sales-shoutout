@@ -70,14 +70,18 @@ async function getSellingRep(job) {
   return tech ? `${tech.first_name} ${tech.last_name}`.trim() : 'Unassigned';
 }
 
-// Pages through /jobs (newest-created first) collecting real sales (excluding segment splits)
-// whose created_at falls within [startDateStr, endDateStr] (inclusive, in the given timezone).
-// Stops once a full page is entirely older than startDateStr, with a hard page cap as a safety
-// net for wide ranges (e.g. "this week") in case that ordering assumption ever breaks.
+// Pages through /jobs (newest-created first) collecting jobs created in [startDateStr, endDateStr]
+// (inclusive, in the given timezone). Segment splits (invoice numbers ending "-2", "-3", etc.) are
+// kept SEPARATE from confirmed sales rather than dropped — sometimes a split really is just a
+// phase of a job already counted (e.g. patio restoration jobs), but sometimes it's a genuine
+// add-on sale (e.g. a customer adding lights partway through), and that's a judgment call, not
+// something detectable from the data alone. Stops once a full page is entirely older than
+// startDateStr, with a hard page cap as a safety net for wide ranges.
 export async function fetchSoldInRange(startDateStr, endDateStr, tz = 'America/Toronto') {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 40;
-  const candidates = [];
+  const confirmedJobs = [];
+  const splitJobs = [];
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const res = await fetch(`${BASE}/jobs?page=${page}&page_size=${PAGE_SIZE}`, { headers });
@@ -93,7 +97,7 @@ export async function fetchSoldInRange(startDateStr, endDateStr, tz = 'America/T
       if (!createdDateStr) continue;
       if (createdDateStr >= startDateStr && createdDateStr <= endDateStr) {
         allOlderThanRange = false;
-        if (!isSegmentSplit(job.invoice_number)) candidates.push(job);
+        (isSegmentSplit(job.invoice_number) ? splitJobs : confirmedJobs).push(job);
       } else if (createdDateStr > endDateStr) {
         allOlderThanRange = false; // still within newer territory, keep paging
       }
@@ -103,17 +107,22 @@ export async function fetchSoldInRange(startDateStr, endDateStr, tz = 'America/T
     if (jobs.length < PAGE_SIZE) break;
   }
 
+  const toSaleRecord = async (job) => ({
+    repName: await getSellingRep(job),
+    service: job.job_fields?.job_type?.name || 'Unspecified service',
+    amount: (job.total_amount || 0) / 100,
+    customer: `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim(),
+    dateSold: localDateStr(job.created_at, tz),
+    invoiceNumber: job.invoice_number || null,
+  });
+
   const sold = [];
-  for (const job of candidates) {
-    sold.push({
-      repName: await getSellingRep(job),
-      service: job.job_fields?.job_type?.name || 'Unspecified service',
-      amount: (job.total_amount || 0) / 100,
-      customer: `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim(),
-      dateSold: localDateStr(job.created_at, tz),
-    });
-  }
-  return sold;
+  for (const job of confirmedJobs) sold.push(await toSaleRecord(job));
+
+  const splits = [];
+  for (const job of splitJobs) splits.push(await toSaleRecord(job));
+
+  return { sold, splits };
 }
 
 // Shared aggregation used by both the scheduled shoutouts and Sophia's Q&A answers.
@@ -135,11 +144,16 @@ export function aggregateSold(sold) {
   return { byRep, byService, total, count: sold.length };
 }
 
-function formatMessage(sold, label, tz) {
+function formatMessage(sold, splits, label, tz) {
   const dateLabel = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'long', day: 'numeric' }).format(new Date());
 
+  const splitLines = splits.length
+    ? `\n\n*⚠️ Splits needing a look — not counted in the total, check if any are actually add-on sales:*\n` +
+      splits.map(s => `   • #${s.invoiceNumber}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer}, ${s.repName})`).join('\n')
+    : '';
+
   if (!sold.length) {
-    return `📊 *${label} — ${dateLabel}*\n\nNo sales logged yet today.`;
+    return `📊 *${label} — ${dateLabel}*\n\nNo confirmed sales logged yet today.${splitLines}`;
   }
 
   const { byRep, byService, total, count } = aggregateSold(sold);
@@ -158,7 +172,7 @@ function formatMessage(sold, label, tz) {
     .map(s => `   • ${s.repName}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer})`)
     .join('\n');
 
-  return `📊 *${label} — ${dateLabel}*\n\n*By rep:*\n${repBlocks}\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}`;
+  return `📊 *${label} — ${dateLabel}*\n\n*By rep:*\n${repBlocks}\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}${splitLines}`;
 }
 
 export async function postToSlack(text, threadTs) {
@@ -179,8 +193,8 @@ export async function postToSlack(text, threadTs) {
 
 export async function runShoutout({ label, tz = 'America/Toronto' }) {
   const todayStr = localDateStr(new Date().toISOString(), tz);
-  const sold = await fetchSoldInRange(todayStr, todayStr, tz);
-  const message = formatMessage(sold, label, tz);
+  const { sold, splits } = await fetchSoldInRange(todayStr, todayStr, tz);
+  const message = formatMessage(sold, splits, label, tz);
   await postToSlack(message);
-  return { soldCount: sold.length, message };
+  return { soldCount: sold.length, splitCount: splits.length, message };
 }
