@@ -1,4 +1,5 @@
 import { fetchSoldInRange, aggregateSold, localDateStr } from './sales.mjs';
+import { fetchGif } from './giphy.mjs';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = 'claude-sonnet-4-6';
@@ -14,6 +15,16 @@ const TOOLS = [{
       end_date: { type: 'string', description: 'YYYY-MM-DD, inclusive' },
     },
     required: ['start_date', 'end_date'],
+  },
+}, {
+  name: 'send_gif',
+  description: 'Search for and get a GIF to include in your reply. Use when someone explicitly asks for a gif, or when celebrating a big result if it fits the moment. Pick a search term that matches the vibe (e.g. "celebration", "excited dog", "money rain").',
+  input_schema: {
+    type: 'object',
+    properties: {
+      search_term: { type: 'string', description: 'What to search for, e.g. "celebration" or "high five"' },
+    },
+    required: ['search_term'],
   },
 }];
 
@@ -31,7 +42,9 @@ Always call get_sales_data to pull real numbers before answering — never estim
 
 The data includes a "splits" list — jobs that are segment/split-offs of an already-counted job (not part of the "confirmed" totals). Some splits are genuinely just another phase of the same sale (e.g. a patio restoration job split into cleaning/sanding visits) and shouldn't count again; others are real add-on sales the customer bought later (e.g. adding lights partway through a job) and should. You can't tell which from the data alone — when splits exist and are relevant to the question, mention them separately and ask the person to confirm which (if any) should count as additional sales, rather than guessing either way yourself.
 
-Keep answers conversational and encouraging, formatted for Slack (use *bold* not **bold**, simple "•" bullets, no headers). Keep it fairly brief — the key numbers and a sentence or two of color, not an exhaustive report, unless the question specifically asks for a detailed breakdown.`;
+Keep answers conversational and encouraging, formatted for Slack (use *bold* not **bold**, simple "•" bullets, no headers). Keep it fairly brief — the key numbers and a sentence or two of color, not an exhaustive report, unless the question specifically asks for a detailed breakdown.
+
+If someone asks for a gif, or it's a genuinely big result worth celebrating, use send_gif and include the returned URL on its own line in your reply — Slack will render it as an image automatically.`;
 
   const messages = [{ role: 'user', content: question }];
 
@@ -60,30 +73,38 @@ Keep answers conversational and encouraging, formatted for Slack (use *bold* not
     const data = await res.json();
     messages.push({ role: 'assistant', content: data.content });
 
-    const toolUse = data.content.find(b => b.type === 'tool_use');
-    if (!toolUse) {
+    const toolUses = data.content.filter(b => b.type === 'tool_use');
+    if (!toolUses.length) {
       const textBlock = data.content.find(b => b.type === 'text');
       return textBlock?.text || "I wasn't able to put together an answer for that.";
     }
 
-    let toolResultText;
-    try {
-      const { sold, splits } = await fetchSoldInRange(toolUse.input.start_date, toolUse.input.end_date, TZ);
-      toolResultText = JSON.stringify({
-        confirmed: aggregateSold(sold),
-        splits: splits.map(s => ({
-          invoiceNumber: s.invoiceNumber, service: s.service, amount: s.amount,
-          customer: s.customer, repName: s.repName,
-        })),
-      });
-    } catch (err) {
-      toolResultText = JSON.stringify({ error: err.message });
+    const toolResults = [];
+    for (const toolUse of toolUses) {
+      let toolResultText;
+      try {
+        if (toolUse.name === 'get_sales_data') {
+          const { sold, splits } = await fetchSoldInRange(toolUse.input.start_date, toolUse.input.end_date, TZ);
+          toolResultText = JSON.stringify({
+            confirmed: aggregateSold(sold),
+            splits: splits.map(s => ({
+              invoiceNumber: s.invoiceNumber, service: s.service, amount: s.amount,
+              customer: s.customer, repName: s.repName,
+            })),
+          });
+        } else if (toolUse.name === 'send_gif') {
+          const url = await fetchGif(toolUse.input.search_term);
+          toolResultText = JSON.stringify(url ? { gif_url: url } : { error: 'No gif found for that search term.' });
+        } else {
+          toolResultText = JSON.stringify({ error: `Unknown tool: ${toolUse.name}` });
+        }
+      } catch (err) {
+        toolResultText = JSON.stringify({ error: err.message });
+      }
+      toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: toolResultText });
     }
 
-    messages.push({
-      role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResultText }],
-    });
+    messages.push({ role: 'user', content: toolResults });
   }
 
   return "Sorry, I'm having trouble pulling that together right now — try asking again in a bit.";
