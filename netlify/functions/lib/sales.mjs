@@ -1,4 +1,6 @@
 
+import { fetchGif } from './giphy.mjs';
+
 const HCP_API_KEY = process.env.HCP_API_KEY;
 const BASE = 'https://api.housecallpro.com';
 const headers = { Authorization: `Token ${HCP_API_KEY}`, 'Content-Type': 'application/json' };
@@ -144,7 +146,12 @@ export function aggregateSold(sold) {
   return { byRep, byService, total, count: sold.length };
 }
 
-function formatMessage(sold, splits, label, tz) {
+// Milestones worth an automatic celebration gif — per Nick: $10k+ in a day, or any single sale
+// over $5k.
+const BIG_DAY_TOTAL = 10000;
+const BIG_SINGLE_SALE = 5000;
+
+function formatMessage(sold, splits, gifUrl, label, tz) {
   const dateLabel = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'long', day: 'numeric' }).format(new Date());
 
   const splitLines = splits.length
@@ -152,8 +159,10 @@ function formatMessage(sold, splits, label, tz) {
       splits.map(s => `   • #${s.invoiceNumber}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer}, ${s.repName})`).join('\n')
     : '';
 
+  const gifLine = gifUrl ? `\n\n${gifUrl}` : '';
+
   if (!sold.length) {
-    return `📊 *${label} — ${dateLabel}*\n\nNo confirmed sales logged yet today.${splitLines}`;
+    return `📊 *${label} — ${dateLabel}*\n\nNo confirmed sales logged yet today.${splitLines}${gifLine}`;
   }
 
   const { byRep, byService, total, count } = aggregateSold(sold);
@@ -172,7 +181,7 @@ function formatMessage(sold, splits, label, tz) {
     .map(s => `   • ${s.repName}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer})`)
     .join('\n');
 
-  return `📊 *${label} — ${dateLabel}*\n\n*By rep:*\n${repBlocks}\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}${splitLines}`;
+  return `📊 *${label} — ${dateLabel}*\n\n*By rep:*\n${repBlocks}\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}${splitLines}${gifLine}`;
 }
 
 export async function postToSlack(text, threadTs) {
@@ -182,7 +191,7 @@ export async function postToSlack(text, threadTs) {
     body: JSON.stringify({
       channel: SLACK_SALES_CHANNEL_ID,
       text,
-      unfurl_links: false,
+      unfurl_links: true, // needed so a celebration gif URL actually renders as an image, not just a link
       ...(threadTs ? { thread_ts: threadTs } : {}),
     }),
   });
@@ -194,7 +203,13 @@ export async function postToSlack(text, threadTs) {
 export async function runShoutout({ label, tz = 'America/Toronto' }) {
   const todayStr = localDateStr(new Date().toISOString(), tz);
   const { sold, splits } = await fetchSoldInRange(todayStr, todayStr, tz);
-  const message = formatMessage(sold, splits, label, tz);
+  const { total } = aggregateSold(sold);
+  const bigSale = sold.find(s => s.amount >= BIG_SINGLE_SALE);
+  const isMilestone = total >= BIG_DAY_TOTAL || !!bigSale;
+  const gifUrl = isMilestone
+    ? await fetchGif(bigSale ? 'huge sale celebration money' : 'celebration team success')
+    : null;
+  const message = formatMessage(sold, splits, gifUrl, label, tz);
   await postToSlack(message);
   return { soldCount: sold.length, splitCount: splits.length, message };
 }
