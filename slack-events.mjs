@@ -1,9 +1,8 @@
-
 import { postToSlack } from './lib/sales.mjs';
 import { askSophia } from './lib/assistant.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_SIGNING_SECRET = (process.env.SLACK_SIGNING_SECRET || '').trim();
 
 // Verifies the request really came from Slack (not a spoofed request hitting this public URL),
 // per Slack's signing-secret scheme: https://api.slack.com/authentication/verifying-requests-from-slack
@@ -31,17 +30,23 @@ function verifySlackSignature(request, rawBody) {
 
 export default async (request) => {
   const rawBody = await request.text();
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return new Response('Bad payload', { status: 400 });
+  }
+
+  // Slack's one-time handshake when Event Subscriptions is first turned on — must echo the
+  // challenge back verbatim, or Slack won't accept the URL. This is a single-use, non-sensitive
+  // ping (it reveals nothing), so it's handled before the signature check below rather than
+  // being blocked by it.
+  if (payload.type === 'url_verification') {
+    return new Response(payload.challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
+  }
 
   if (!verifySlackSignature(request, rawBody)) {
     return new Response('Invalid signature', { status: 401 });
-  }
-
-  const payload = JSON.parse(rawBody);
-
-  // Slack's one-time handshake when Event Subscriptions is first turned on — must echo the
-  // challenge back verbatim, or Slack won't accept the URL.
-  if (payload.type === 'url_verification') {
-    return new Response(payload.challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
   }
 
   // Slack retries the same event if it doesn't get a fast-enough response, and Claude + Housecall
