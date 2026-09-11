@@ -1,1 +1,21 @@
+import { postToSlack } from './lib/sales.mjs';
 
+// TEMPORARY diagnostic — not part of the real pipeline. Just forwards whatever Housecall Pro
+// sends to #sales so we can see a real webhook payload and confirm whether it names who
+// performed the action, before building actual storage around it. Safe to delete once that's
+// answered — doesn't touch any other logic.
+export default async (request) => {
+  const rawBody = await request.text();
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    payload = { raw: rawBody };
+  }
+
+  const pretty = JSON.stringify(payload, null, 2);
+  const summary = `🔍 *Webhook received:*\n\`\`\`${pretty.slice(0, 3000)}\`\`\``;
+  await postToSlack(summary).catch(() => {});
+
+  return new Response('OK', { status: 200 });
+};
