@@ -10,15 +10,10 @@ export default async (request) => {
 
   try {
     const answer = await askSophia(question || 'How are we doing today?');
-    try {
-      await postToSlack(answer, event.thread_ts || event.ts);
-    } catch {
-      // Threaded post failed for some reason (bad ts, etc.) — better a plain message than nothing.
-      await postToSlack(answer).catch(() => {});
-    }
+    await postToSlack(answer);
   } catch (err) {
     const msg = `Sorry, I ran into an error pulling that together: ${err.message}`;
-    await postToSlack(msg, event.thread_ts || event.ts).catch(() => postToSlack(msg).catch(() => {}));
+    await postToSlack(msg).catch(() => {});
   }
 
   return new Response('OK', { status: 200 });
