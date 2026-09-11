@@ -42,6 +42,8 @@ Always call get_sales_data to pull real numbers before answering — never estim
 
 The data includes a "splits" list — jobs that are segment/split-offs of an already-counted job (not part of the "confirmed" totals). Some splits are genuinely just another phase of the same sale (e.g. a patio restoration job split into cleaning/sanding visits) and shouldn't count again; others are real add-on sales the customer bought later (e.g. adding lights partway through a job) and should. You can't tell which from the data alone — when splits exist and are relevant to the question, mention them separately and ask the person to confirm which (if any) should count as additional sales, rather than guessing either way yourself.
 
+Report on totals and by-service breakdowns only. Do NOT mention or report on which rep or tech is attached to a sale — that data isn't reliable right now (it often just reflects whichever field tech was assigned to do the work, not who actually sold it) and reporting it would be actively misleading. If someone specifically asks who sold something, say that rep attribution isn't reliable right now rather than guessing from the job data.
+
 Keep answers conversational and encouraging, formatted for Slack (use *bold* not **bold**, simple "•" bullets, no headers). Keep it fairly brief — the key numbers and a sentence or two of color, not an exhaustive report, unless the question specifically asks for a detailed breakdown.
 
 If someone asks for a gif, or it's a genuinely big result worth celebrating, use send_gif and include the returned URL on its own line in your reply — Slack will render it as an image automatically.`;
@@ -85,11 +87,11 @@ If someone asks for a gif, or it's a genuinely big result worth celebrating, use
       try {
         if (toolUse.name === 'get_sales_data') {
           const { sold, splits } = await fetchSoldInRange(toolUse.input.start_date, toolUse.input.end_date, TZ);
+          const { byService, total, count } = aggregateSold(sold);
           toolResultText = JSON.stringify({
-            confirmed: aggregateSold(sold),
+            confirmed: { byService, total, count },
             splits: splits.map(s => ({
-              invoiceNumber: s.invoiceNumber, service: s.service, amount: s.amount,
-              customer: s.customer, repName: s.repName,
+              invoiceNumber: s.invoiceNumber, service: s.service, amount: s.amount, customer: s.customer,
             })),
           });
         } else if (toolUse.name === 'send_gif') {
