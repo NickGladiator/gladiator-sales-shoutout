@@ -156,7 +156,7 @@ function formatMessage(sold, splits, gifUrl, label, tz) {
 
   const splitLines = splits.length
     ? `\n\n*⚠️ Splits needing a look — not counted in the total, check if any are actually add-on sales:*\n` +
-      splits.map(s => `   • #${s.invoiceNumber}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer}, ${s.repName})`).join('\n')
+      splits.map(s => `   • #${s.invoiceNumber}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer})`).join('\n')
     : '';
 
   const gifLine = gifUrl ? `\n\n${gifUrl}` : '';
@@ -165,12 +165,7 @@ function formatMessage(sold, splits, gifUrl, label, tz) {
     return `📊 *${label} — ${dateLabel}*\n\nNo confirmed sales logged yet today.${splitLines}${gifLine}`;
   }
 
-  const { byRep, byService, total, count } = aggregateSold(sold);
-
-  const repBlocks = Object.entries(byRep)
-    .sort((a, b) => b[1].total - a[1].total)
-    .map(([rep, info]) => `*${rep}* — $${info.total.toFixed(2)} (${info.count} sale${info.count === 1 ? '' : 's'})`)
-    .join('\n');
+  const { byService, total, count } = aggregateSold(sold);
 
   const serviceLines = Object.entries(byService)
     .sort((a, b) => b[1].total - a[1].total)
@@ -178,10 +173,10 @@ function formatMessage(sold, splits, gifUrl, label, tz) {
     .join('\n');
 
   const itemLines = sold
-    .map(s => `   • ${s.repName}: ${s.service} — $${s.amount.toFixed(2)} (${s.customer})`)
+    .map(s => `   • ${s.service} — $${s.amount.toFixed(2)} (${s.customer})`)
     .join('\n');
 
-  return `📊 *${label} — ${dateLabel}*\n\n*By rep:*\n${repBlocks}\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}${splitLines}${gifLine}`;
+  return `📊 *${label} — ${dateLabel}*\n\n*By service:*\n${serviceLines}\n\n*All sales:*\n${itemLines}\n\n*Company total: $${total.toFixed(2)}* across ${count} sale${count === 1 ? '' : 's'}${splitLines}${gifLine}`;
 }
 
 export async function postToSlack(text, threadTs) {
