@@ -66,7 +66,7 @@ export default async (request) => {
     // Immediate visible ack, before any slow work — if this doesn't show up in Slack, the event
     // isn't reaching this function at all (subscription/scope issue upstream). If this DOES show
     // up but nothing further ever follows, the problem is specifically in the background worker.
-    await postToSlack('🤔 On it...', payload.event.thread_ts || payload.event.ts).catch(() => {});
+    await postToSlack('🤔 On it...').catch(() => {});
 
     try {
       const res = await fetch(`${new URL(request.url).origin}/.netlify/functions/sophia-worker-background`, {
@@ -75,10 +75,10 @@ export default async (request) => {
         body: JSON.stringify({ event: payload.event }),
       });
       if (!res.ok) {
-        await postToSlack(`(handoff to background worker failed: ${res.status})`, payload.event.thread_ts || payload.event.ts).catch(() => {});
+        await postToSlack(`(handoff to background worker failed: ${res.status})`).catch(() => {});
       }
     } catch (err) {
-      await postToSlack(`(couldn't reach the background worker: ${err.message})`, payload.event.thread_ts || payload.event.ts).catch(() => {});
+      await postToSlack(`(couldn't reach the background worker: ${err.message})`).catch(() => {});
     }
   }
 
