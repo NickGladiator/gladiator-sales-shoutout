@@ -112,7 +112,7 @@ export async function fetchSoldInRange(startDateStr, endDateStr, tz = 'America/T
   const toSaleRecord = async (job) => ({
     repName: await getSellingRep(job),
     service: job.job_fields?.job_type?.name || 'Unspecified service',
-    amount: (job.total_amount || 0) / 100,
+    amount: (job.subtotal || 0) / 100, // subtotal, not total_amount — total_amount includes tax
     customer: `${job.customer?.first_name || ''} ${job.customer?.last_name || ''}`.trim(),
     dateSold: localDateStr(job.created_at, tz),
     invoiceNumber: job.invoice_number || null,
