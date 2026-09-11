@@ -1,6 +1,6 @@
-import { postToSlack } from './lib/sales.mjs';
-import { askSophia } from './lib/assistant.mjs';
-
+// Note: this file intentionally does NOT import askSophia or postToSlack — the actual work
+// happens in sophia-worker-background.mjs, which this file hands off to. Keeping this function
+// fast and simple is what lets it respond to Slack within its time limit.
 const SLACK_SIGNING_SECRET = (process.env.SLACK_SIGNING_SECRET || '').trim();
 
 // Verifies the request really came from Slack. Uses the Web Crypto API (crypto.subtle) — a
@@ -56,16 +56,14 @@ export default async (request) => {
   }
 
   if (payload.type === 'event_callback' && payload.event?.type === 'app_mention') {
-    const event = payload.event;
-    const question = event.text.replace(/<@[^>]+>\s*/, '').trim();
-
-    try {
-      const answer = await askSophia(question || 'How are we doing today?');
-      await postToSlack(answer, event.thread_ts || event.ts);
-    } catch (err) {
-      await postToSlack(`Sorry, I ran into an error pulling that together: ${err.message}`, event.thread_ts || event.ts)
-        .catch(() => {});
-    }
+    // Hand off to a background function rather than processing inline — the Claude + Housecall
+    // Pro round trip can easily take longer than the ~10s a normal function gets before being
+    // killed, which was silently swallowing the whole request with no reply ever posted.
+    await fetch(`${new URL(request.url).origin}/.netlify/functions/sophia-worker-background`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event: payload.event }),
+    }).catch(() => { /* best effort — if this fails there's nothing more to do here */ });
   }
 
   return new Response('OK', { status: 200 });
