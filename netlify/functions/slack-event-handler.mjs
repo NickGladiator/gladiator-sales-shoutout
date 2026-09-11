@@ -1,6 +1,8 @@
-// Note: this file intentionally does NOT import askSophia or postToSlack — the actual work
-// happens in sophia-worker-background.mjs, which this file hands off to. Keeping this function
-// fast and simple is what lets it respond to Slack within its time limit.
+import { postToSlack } from './lib/sales.mjs';
+
+// Note: askSophia is NOT imported here — the actual slow work happens in
+// sophia-worker-background.mjs, which this file hands off to. Keeping this function fast is
+// what lets it respond to Slack within its time limit.
 const SLACK_SIGNING_SECRET = (process.env.SLACK_SIGNING_SECRET || '').trim();
 
 // Verifies the request really came from Slack. Uses the Web Crypto API (crypto.subtle) — a
@@ -47,8 +49,13 @@ export default async (request) => {
     return new Response(payload.challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
   }
 
-  if (!(await verifySlackSignature(request, rawBody))) {
-    return new Response('Invalid signature', { status: 401 });
+  const signatureValid = await verifySlackSignature(request, rawBody);
+  // TEMPORARY: log-only rather than blocking on a failed signature check. A real mismatch here
+  // would produce exactly the symptom we're chasing — total silence, no error anywhere either of
+  // us can see. Once real events are confirmed working end-to-end, this should go back to hard
+  // rejecting on !signatureValid.
+  if (!signatureValid) {
+    console.error('Slack signature check failed — continuing anyway (temporary, see comment).');
   }
 
   if (request.headers.get('x-slack-retry-num')) {
@@ -56,14 +63,23 @@ export default async (request) => {
   }
 
   if (payload.type === 'event_callback' && payload.event?.type === 'app_mention') {
-    // Hand off to a background function rather than processing inline — the Claude + Housecall
-    // Pro round trip can easily take longer than the ~10s a normal function gets before being
-    // killed, which was silently swallowing the whole request with no reply ever posted.
-    await fetch(`${new URL(request.url).origin}/.netlify/functions/sophia-worker-background`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event: payload.event }),
-    }).catch(() => { /* best effort — if this fails there's nothing more to do here */ });
+    // Immediate visible ack, before any slow work — if this doesn't show up in Slack, the event
+    // isn't reaching this function at all (subscription/scope issue upstream). If this DOES show
+    // up but nothing further ever follows, the problem is specifically in the background worker.
+    await postToSlack('🤔 On it...', payload.event.thread_ts || payload.event.ts).catch(() => {});
+
+    try {
+      const res = await fetch(`${new URL(request.url).origin}/.netlify/functions/sophia-worker-background`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: payload.event }),
+      });
+      if (!res.ok) {
+        await postToSlack(`(handoff to background worker failed: ${res.status})`, payload.event.thread_ts || payload.event.ts).catch(() => {});
+      }
+    } catch (err) {
+      await postToSlack(`(couldn't reach the background worker: ${err.message})`, payload.event.thread_ts || payload.event.ts).catch(() => {});
+    }
   }
 
   return new Response('OK', { status: 200 });
