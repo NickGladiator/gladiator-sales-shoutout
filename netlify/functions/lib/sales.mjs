@@ -28,15 +28,39 @@ function isSegmentSplit(invoiceNumber) {
   return match[2] !== '1';
 }
 
-// The rep who SOLD it isn't necessarily the field tech assigned to the job — for jobs that came
-// from a converted estimate, the estimate's assigned_employees is the person who built/sent it.
-// Falls back to the job's own assigned tech only when there's no estimate to check.
+// Your team tags estimates/jobs with the rep's first name (confirmed from your account's actual
+// tag colors) as the real "who sold this" signal — assigned_employees is the field tech doing
+// the work, not necessarily the seller, and defaulted to office staff often enough that most
+// sales were coming back "Unassigned". Update this list if reps change.
+const REP_TAG_NAMES = ['James', 'Duncan', 'Sinead', 'Jen', 'Nick', 'Lilly', 'Zach', 'Kaleigh', 'Braden'];
+
+function findRepTag(tags) {
+  if (!Array.isArray(tags)) return null;
+  for (const tag of tags) {
+    const match = REP_TAG_NAMES.find(name => name.toLowerCase() === String(tag).trim().toLowerCase());
+    if (match) return match;
+  }
+  return null;
+}
+
+// The rep who SOLD it — checked in order of reliability:
+//   1. A rep-name tag on the job itself
+//   2. A rep-name tag on the originating estimate (if there is one)
+//   3. The estimate's assigned_employees (who built/sent it)
+//   4. The job's own assigned tech, as a last resort
 async function getSellingRep(job) {
+  const jobTagRep = findRepTag(job.tags);
+  if (jobTagRep) return jobTagRep;
+
   if (job.original_estimate_id) {
     try {
       const res = await fetch(`${BASE}/estimates/${job.original_estimate_id}`, { headers });
       if (res.ok) {
         const est = await res.json();
+
+        const estTagRep = findRepTag(est.tags);
+        if (estTagRep) return estTagRep;
+
         const rep = est.assigned_employees?.[0];
         if (rep) return `${rep.first_name} ${rep.last_name}`.trim();
       }
