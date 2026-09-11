@@ -29,6 +29,8 @@ Today's date is ${todayStr} (America/Toronto time).
 
 Always call get_sales_data to pull real numbers before answering — never estimate, guess, or make up figures. If asked about "this week", use the most recent Monday through today. If asked about "today", use today's date for both start and end. If no range is specified, default to today.
 
+The data includes a "splits" list — jobs that are segment/split-offs of an already-counted job (not part of the "confirmed" totals). Some splits are genuinely just another phase of the same sale (e.g. a patio restoration job split into cleaning/sanding visits) and shouldn't count again; others are real add-on sales the customer bought later (e.g. adding lights partway through a job) and should. You can't tell which from the data alone — when splits exist and are relevant to the question, mention them separately and ask the person to confirm which (if any) should count as additional sales, rather than guessing either way yourself.
+
 Keep answers conversational and encouraging, formatted for Slack (use *bold* not **bold**, simple "•" bullets, no headers). Keep it fairly brief — the key numbers and a sentence or two of color, not an exhaustive report, unless the question specifically asks for a detailed breakdown.`;
 
   const messages = [{ role: 'user', content: question }];
@@ -66,8 +68,14 @@ Keep answers conversational and encouraging, formatted for Slack (use *bold* not
 
     let toolResultText;
     try {
-      const sold = await fetchSoldInRange(toolUse.input.start_date, toolUse.input.end_date, TZ);
-      toolResultText = JSON.stringify(aggregateSold(sold));
+      const { sold, splits } = await fetchSoldInRange(toolUse.input.start_date, toolUse.input.end_date, TZ);
+      toolResultText = JSON.stringify({
+        confirmed: aggregateSold(sold),
+        splits: splits.map(s => ({
+          invoiceNumber: s.invoiceNumber, service: s.service, amount: s.amount,
+          customer: s.customer, repName: s.repName,
+        })),
+      });
     } catch (err) {
       toolResultText = JSON.stringify({ error: err.message });
     }
